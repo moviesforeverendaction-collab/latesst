@@ -7,6 +7,7 @@
  * • Broken template literals fixed
  * • One-time old index migration added
  * • Content hash syntax fixed
+ * • text_search index conflict fixed (old auto-generated index)
  */
 require("dotenv").config();
 const express = require("express");
@@ -54,6 +55,8 @@ async function connectDB() {
   await filesCol.dropIndex("file_unique_id_1").catch(() => {});
   await filesCol.dropIndex("tmdb_id_1").catch(() => {});
   await filesCol.dropIndex("media_type_1").catch(() => {});
+  // NEW: Drop the old default text index that was causing conflict
+  await filesCol.dropIndex("file_name_text_title_text").catch(() => {});
   // ── Indexes (all idempotent — safe to call on every restart) ─────────────
   await safeCreateIndex(filesCol, { file_unique_id: 1 }, { unique: true, name: "uidx_unique" });
   await safeCreateIndex(filesCol, { tmdb_id: 1 }, { name: "uidx_tmdb" });
@@ -263,7 +266,6 @@ function extractFileInfo(msg) {
     .replace(/[._-]+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
-  // FIXED: content hash (was broken in original paste)
   const contentHash = crypto
     .createHash("md5")
     .update(`${fileName}|${fileObj.file_size || 0}`)
@@ -376,7 +378,6 @@ async function indexFile(fileInfo, { autoTmdb = false } = {}) {
       }
     }
     const doc = { ...fileInfo, ...extra, updated_at: new Date().toISOString() };
-    // CRITICAL FIX: Remove download_count from $set
     const { download_count, ...setDoc } = doc;
     const result = await filesCol.updateOne(
       { file_unique_id: fileInfo.file_unique_id },
@@ -718,7 +719,6 @@ bot.on("message", async (msg) => {
   const text = msg.text.trim();
   const userId = msg.from.id;
   const chatId = msg.chat.id;
-  // Pending TMDB link
   if (text.toLowerCase().startsWith("tmdb ") && pendingLinks.has(userId)) {
     const parts = text.split(/\s+/);
     const type = parts[1]?.toLowerCase();
@@ -736,7 +736,6 @@ bot.on("message", async (msg) => {
       { parse_mode: "HTML" }
     );
   }
-  // Pending title edit
   if (text.toLowerCase().startsWith("title ") && pendingTitles.has(userId)) {
     const newTitle = text.replace(/^title\s+/i, "").trim();
     const uid = pendingTitles.get(userId);
@@ -750,7 +749,6 @@ bot.on("message", async (msg) => {
       { parse_mode: "HTML" }
     );
   }
-  // /stats
   if (text === "/stats" && isAdmin(userId)) {
     const [total, movies, tv, linked, dlAgg, users, topFiles, byQuality] = await Promise.all([
       filesCol.countDocuments(),
@@ -775,7 +773,6 @@ bot.on("message", async (msg) => {
     }
     return bot.sendMessage(chatId, out, { parse_mode: "HTML" });
   }
-  // /search with inline filters
   if (text.startsWith("/search ") && isAdmin(userId)) {
     const raw = text.replace("/search ", "").trim();
     const filter = {};
@@ -795,7 +792,6 @@ bot.on("message", async (msg) => {
     searchState.set(userId, state);
     return sendSearchResults(chatId, null, state, userId, false);
   }
-  // /index
   if (text === "/index" && isAdmin(userId)) {
     if (!CHANNEL_ID) return bot.sendMessage(chatId, "❌ CHANNEL_ID not configured.");
     return bot.sendMessage(chatId, `📢 <b>Index Channel</b> <code>${CHANNEL_ID}</code>`, {
@@ -808,13 +804,11 @@ bot.on("message", async (msg) => {
       ]},
     });
   }
-  // /stopindex
   if (text === "/stopindex" && isAdmin(userId)) {
     if (!activeIndexJobs.size) return bot.sendMessage(chatId, "No active index job.");
     for (const [, job] of activeIndexJobs) job.stop();
     return bot.sendMessage(chatId, `⛔ Stopping ${activeIndexJobs.size} job(s)…`);
   }
-  // /fix
   if (text === "/fix" && isAdmin(userId)) {
     const statusMsg = await bot.sendMessage(chatId, "🔄 Re-parsing all records…");
     let fixed = 0, failed = 0;
@@ -830,7 +824,6 @@ bot.on("message", async (msg) => {
       { chat_id: chatId, message_id: statusMsg.message_id }
     );
   }
-  // /pending
   if (text === "/pending" && isAdmin(userId)) {
     const count = await filesCol.countDocuments({ tmdb_id: null });
     const samples = await filesCol.find({ tmdb_id: null }).sort({ indexed_at: -1 }).limit(5).toArray();
@@ -842,7 +835,6 @@ bot.on("message", async (msg) => {
     if (TMDB_API_KEY) out += `\n💡 Use /autolink to auto-link all.`;
     return bot.sendMessage(chatId, out, { parse_mode: "HTML" });
   }
-  // /autolink
   if (text === "/autolink" && isAdmin(userId)) {
     if (!TMDB_API_KEY) return bot.sendMessage(chatId, "❌ TMDB_API_KEY not configured.");
     const statusMsg = await bot.sendMessage(chatId, "🔗 Auto-linking to TMDB…");
@@ -863,7 +855,6 @@ bot.on("message", async (msg) => {
       { chat_id: chatId, message_id: statusMsg.message_id }
     );
   }
-  // /broadcast
   if (text.startsWith("/broadcast ") && isAdmin(userId)) {
     const msg_text = text.replace("/broadcast ", "").trim();
     if (!msg_text) return bot.sendMessage(chatId, "Usage: /broadcast <message>");
