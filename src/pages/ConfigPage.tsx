@@ -8,6 +8,7 @@ import {
 import { FaTelegramPlane } from "react-icons/fa";
 import { SiMongodb } from "react-icons/si";
 import { useStore } from "../store/useStore";
+import { getBackendUrl } from "../lib/backend";
 import { testBotConnection } from "../lib/telegram";
 import toast from "react-hot-toast";
 
@@ -143,11 +144,15 @@ export default function ConfigPage() {
     mongoConfig, setMongoConfig,
     isAdminMode,
   } = useStore();
+  const envBackendUrl = getBackendUrl();
 
   const [activeTab, setActiveTab] = useState<TabId>("bot");
 
   // Bot form
-  const [botForm, setBotForm] = useState({ ...telegramConfig });
+  const [botForm, setBotForm] = useState({
+    ...telegramConfig,
+    backendUrl: telegramConfig.backendUrl || envBackendUrl,
+  });
   const [botTest, setBotTest] = useState<TestResult>(defaultResult());
 
   // MTProto form
@@ -254,7 +259,7 @@ export default function ConfigPage() {
   const [webhookTest, setWebhookTest] = useState<TestResult>(defaultResult());
 
   const handleTestBackend = useCallback(async () => {
-    const backendUrl = botForm.backendUrl?.trim();
+    const backendUrl = getBackendUrl(botForm.backendUrl);
     if (!backendUrl) {
       setWebhookTest({ status: "error", message: "Backend URL is required." });
       return;
@@ -282,7 +287,7 @@ export default function ConfigPage() {
   }, [botForm.backendUrl]);
 
   const handleSetWebhook = useCallback(async () => {
-    const backendUrl = botForm.backendUrl?.trim();
+    const backendUrl = getBackendUrl(botForm.backendUrl);
     if (!backendUrl || !botForm.botToken.trim()) {
       setWebhookTest({ status: "error", message: "Both Backend URL and Bot Token are required." });
       return;
@@ -492,8 +497,8 @@ export default function ConfigPage() {
                   label="Backend API URL"
                   value={botForm.backendUrl || ""}
                   onChange={(v) => setBotForm((f) => ({ ...f, backendUrl: v }))}
-                  placeholder="https://your-bot.railway.app"
-                  hint="The public URL where your bot backend is deployed. Used by the website to fetch indexed files and for streaming. See the Backend tab for setup."
+                  placeholder={envBackendUrl || "https://your-bot.railway.app"}
+                  hint={`The public URL where your bot backend is deployed. Used by the website to fetch indexed files and for streaming.${envBackendUrl ? ` Current VITE_API_URL fallback: ${envBackendUrl}` : " See the Backend tab for setup."}`}
                   monospace
                 />
                 <ConfigInput
@@ -799,7 +804,7 @@ app.get("/stream", async (req, res) => {
               <div className="bg-[#0d1117] border border-white/10 rounded-xl p-4 space-y-2">
                 <p className="text-gray-400 text-xs font-semibold uppercase tracking-wider">Current Backend URL</p>
                 <p className="font-mono text-sm text-cyan-400 break-all">
-                  {botForm.backendUrl || <span className="text-gray-600 italic">Not set — go to Bot API tab</span>}
+                  {getBackendUrl(botForm.backendUrl) || <span className="text-gray-600 italic">Not set — configure Bot API tab or VITE_API_URL</span>}
                 </p>
               </div>
 
