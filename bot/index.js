@@ -42,7 +42,10 @@ async function connectDB() {
   await filesCol.createIndex({ file_unique_id: 1 }, { unique: true });
   await filesCol.createIndex({ tmdb_id: 1 });
   await filesCol.createIndex({ media_type: 1 });
-  await filesCol.createIndex({ file_name: "text", title: "text" });
+  await filesCol.createIndex(
+    { file_name: "text", title: "text" },
+    { language_override: "nolanguage" }   // prevents MongoDB from treating the "language" field as a locale override
+  );
   console.log(`✅ MongoDB connected: ${MONGO_DB}.${MONGO_COLLECTION}`);
 }
 
