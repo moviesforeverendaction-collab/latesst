@@ -10,8 +10,12 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
 const TelegramBot = require("node-telegram-bot-api");
+const { TelegramClient, Api } = require("telegram");
+const { StringSession } = require("telegram/sessions");
 const https = require("https");
 const crypto = require("crypto");
+const bigInt = require("big-integer");
+const { once } = require("events");
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const {
@@ -29,6 +33,9 @@ const {
   TMDB_API_KEY = "",
   INDEX_BATCH_SIZE = "200",
   RATE_LIMIT_MS = "60",
+  API_ID = "",
+  API_HASH = "",
+  SESSION_STRING = "",
 } = process.env;
 
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN is required");
@@ -37,6 +44,10 @@ if (!MONGO_URI) throw new Error("MONGO_URI is required");
 const ADMINS = ADMIN_USER_IDS.split(",").map(Number).filter(Boolean);
 const BATCH_SIZE = parseInt(INDEX_BATCH_SIZE) || 200;
 const RATE_LIMIT = parseInt(RATE_LIMIT_MS) || 60;
+const MTProtoApiId = parseInt(API_ID, 10) || 0;
+const hasMTProtoConfig = !!(MTProtoApiId > 0 && API_HASH && SESSION_STRING);
+let mtprotoClient = null;
+let mtprotoClientPromise = null;
 
 // ─── MongoDB ─────────────────────────────────────────────────────────────────
 let db, filesCol, usersCol, cacheCol;
@@ -105,6 +116,203 @@ async function safeCreateIndex(col, spec, opts = {}) {
       }
     } else {
       console.error(`❌ Index error [${name || "unknown"}]:`, e.message);
+    }
+  }
+}
+
+function escapeRegex(value = "") {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseDownloadQuery(param) {
+  if (param.startsWith("dl_file_")) {
+    const fileUniqueId = param.slice("dl_file_".length).trim();
+    return fileUniqueId ? { file_unique_id: fileUniqueId } : null;
+  }
+
+  const payload = param.replace(/^dl_/, "");
+  const parts = payload.includes("*") ? payload.split("*") : payload.split("_");
+  const [mediaType, tmdbIdRaw, ...rest] = parts;
+  const tmdbId = parseInt(tmdbIdRaw, 10);
+
+  if (!["movie", "tv"].includes(mediaType) || isNaN(tmdbId)) {
+    return null;
+  }
+
+  const query = { tmdb_id: tmdbId, media_type: mediaType };
+  const seasonToken = rest.find((token) => /^s\d+$/i.test(token));
+  const episodeToken = rest.find((token) => /^e\d+$/i.test(token));
+  const qualityTokens = rest.filter((token) => !/^s\d+$/i.test(token) && !/^e\d+$/i.test(token));
+
+  if (seasonToken) query.season = parseInt(seasonToken.slice(1), 10);
+  if (episodeToken) query.episode = parseInt(episodeToken.slice(1), 10);
+
+  const qualityToken = qualityTokens.join("_").trim().toLowerCase();
+  if (qualityToken === "full_batch") {
+    query.is_episode_pack = true;
+  } else if (qualityToken) {
+    query.quality = new RegExp(escapeRegex(qualityToken).replace(/_/g, "[ _.-]*"), "i");
+  }
+
+  return query;
+}
+
+function parseHttpRange(rangeHeader, fileSize) {
+  if (!fileSize) {
+    return { start: 0, end: 0, partial: false };
+  }
+  if (!rangeHeader) {
+    return { start: 0, end: fileSize - 1, partial: false };
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+  if (!match) return null;
+
+  let start;
+  let end;
+
+  if (match[1]) {
+    start = parseInt(match[1], 10);
+    end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+  } else if (match[2]) {
+    const suffixLength = parseInt(match[2], 10);
+    if (!suffixLength) return null;
+    start = Math.max(fileSize - suffixLength, 0);
+    end = fileSize - 1;
+  } else {
+    return null;
+  }
+
+  if (
+    Number.isNaN(start) ||
+    Number.isNaN(end) ||
+    start < 0 ||
+    end < start ||
+    start >= fileSize
+  ) {
+    return null;
+  }
+
+  return { start, end: Math.min(end, fileSize - 1), partial: true };
+}
+
+async function getMTProtoClient() {
+  if (!hasMTProtoConfig) {
+    throw new Error("MTProto is not configured");
+  }
+  if (mtprotoClient) {
+    return mtprotoClient;
+  }
+  if (!mtprotoClientPromise) {
+    mtprotoClientPromise = (async () => {
+      const client = new TelegramClient(
+        new StringSession(SESSION_STRING),
+        MTProtoApiId,
+        API_HASH,
+        { connectionRetries: 5 }
+      );
+      client.setLogLevel("error");
+      await client.connect();
+      if (!(await client.checkAuthorization())) {
+        throw new Error("SESSION_STRING is not authorized for MTProto streaming");
+      }
+      mtprotoClient = client;
+      return client;
+    })().catch((error) => {
+      mtprotoClientPromise = null;
+      throw error;
+    });
+  }
+  return mtprotoClientPromise;
+}
+
+async function resolveStreamRecord({ fileId, channelId, messageId }) {
+  if (channelId && Number.isInteger(messageId)) {
+    const byMessage = await filesCol.findOne({
+      channel_id: String(channelId),
+      message_id: messageId,
+    });
+    if (byMessage) return byMessage;
+  }
+
+  if (fileId) {
+    return filesCol.findOne({ file_id: String(fileId) });
+  }
+
+  return null;
+}
+
+async function getMTProtoDocument(record) {
+  if (!record?.channel_id || !record?.message_id) {
+    throw new Error("Indexed file is missing channel_id/message_id for MTProto streaming");
+  }
+
+  const client = await getMTProtoClient();
+  const entity = await client.getInputEntity(String(record.channel_id));
+  const messages = await client.getMessages(entity, { ids: [Number(record.message_id)] });
+  const message = Array.isArray(messages) ? messages[0] : messages;
+  const document = message?.media?.document || message?.document;
+
+  if (!(document instanceof Api.Document)) {
+    throw new Error("Telegram message does not contain a streamable document");
+  }
+
+  return { client, document };
+}
+
+async function streamViaMTProto(req, res, record) {
+  const { client, document } = await getMTProtoDocument(record);
+  const fileSize = Number(document.size || record.file_size || 0);
+  const range = parseHttpRange(req.headers.range, fileSize);
+
+  if (!range) {
+    return res.status(416).json({ error: "Invalid Range header" });
+  }
+
+  const mimeType = record.mime_type || "application/octet-stream";
+  const totalBytes = range.end - range.start + 1;
+  const requestSize = 256 * 1024;
+  const limit = Math.max(1, Math.ceil(totalBytes / requestSize));
+
+  res.writeHead(range.partial ? 206 : 200, {
+    "Content-Type": mimeType,
+    "Content-Length": totalBytes,
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "public, max-age=3600",
+    ...(range.partial ? { "Content-Range": `bytes ${range.start}-${range.end}/${fileSize}` } : {}),
+  });
+
+  let remaining = totalBytes;
+  const inputLocation = new Api.InputDocumentFileLocation({
+    id: document.id,
+    accessHash: document.accessHash,
+    fileReference: document.fileReference,
+    thumbSize: "",
+  });
+
+  try {
+    for await (const chunk of client.iterDownload({
+      file: inputLocation,
+      offset: bigInt(range.start),
+      limit,
+      chunkSize: requestSize,
+      requestSize,
+      fileSize: bigInt(fileSize),
+      dcId: document.dcId,
+    })) {
+      const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      if (!res.write(slice)) {
+        await once(res, "drain");
+      }
+      remaining -= slice.length;
+      if (remaining <= 0) break;
+    }
+    res.end();
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.destroy(error);
     }
   }
 }
@@ -414,7 +622,9 @@ async function indexFile(fileInfo, { autoTmdb = false } = {}) {
 bot.onText(/\/start(.*)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const param = (match[1] || "").trim();
+  const rawParam = (match[1] || "").trim();
+  let param = rawParam;
+  try { param = decodeURIComponent(rawParam); } catch {}
   usersCol.updateOne(
     { user_id: userId },
     {
@@ -437,22 +647,12 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
         }
       } catch {}
     }
-    const parts = param.replace("dl_", "").split("*");
-    let query = {};
-    if (parts[0] === "movie" || parts[0] === "tv") {
-      const tmdbId = parseInt(parts[1]);
-      if (!isNaN(tmdbId)) {
-        query = { tmdb_id: tmdbId, media_type: parts[0] };
-        if (parts.length > 2) {
-          const extra = parts.slice(2);
-          const sIdx = extra.findIndex(p => /^s\d+$/i.test(p));
-          if (sIdx !== -1) {
-            query.season = parseInt(extra[sIdx].slice(1));
-            const eIdx = extra.findIndex(p => /^e\d+$/i.test(p));
-            if (eIdx !== -1) query.episode = parseInt(extra[eIdx].slice(1));
-          }
-        }
-      }
+    const query = parseDownloadQuery(param);
+    if (!query) {
+      return bot.sendMessage(chatId,
+        `❌ <b>Invalid download link</b>\n\nPlease go back to the website and try again.`,
+        { parse_mode: "HTML" }
+      );
     }
     const files = await filesCol.find(query).sort({ quality: -1 }).limit(10).toArray();
     if (!files.length) {
@@ -783,10 +983,20 @@ app.get("/health", noCache, async (req, res) => {
   try { await db.command({ ping: 1 }); dbStatus = "connected"; } catch {}
   let botOk = false;
   try { await bot.getMe(); botOk = true; } catch {}
+  let mtprotoStatus = hasMTProtoConfig ? "configured" : "not_configured";
+  if (hasMTProtoConfig) {
+    try {
+      await getMTProtoClient();
+      mtprotoStatus = "connected";
+    } catch {
+      mtprotoStatus = "error";
+    }
+  }
   res.json({
     status: "ok", db: dbStatus, bot: botOk, version: "2.0.0",
     timestamp: new Date().toISOString(),
     files: await filesCol.countDocuments().catch(() => 0),
+    mtproto: mtprotoStatus,
   });
 });
 
@@ -935,8 +1145,15 @@ app.post("/api/reparse", requireAdminKey, noCache, async (req, res) => {
 // Stream proxy (no cache needed)
 app.get("/stream", async (req, res) => {
   try {
-    const { file_id } = req.query;
+    const file_id = req.query.file_id ? String(req.query.file_id) : "";
+    const channel_id = req.query.channel_id ? String(req.query.channel_id) : "";
+    const message_id = req.query.message_id ? parseInt(req.query.message_id, 10) : NaN;
     if (!file_id) return res.status(400).json({ error: "file_id required" });
+    const indexedRecord = await resolveStreamRecord({
+      fileId: file_id,
+      channelId: channel_id,
+      messageId: Number.isNaN(message_id) ? undefined : message_id,
+    });
     const fileRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -944,8 +1161,11 @@ app.get("/stream", async (req, res) => {
     });
     const fileData = await fileRes.json();
     if (!fileData.ok) {
+      if (hasMTProtoConfig && indexedRecord) {
+        return streamViaMTProto(req, res, indexedRecord);
+      }
       return res.status(413).json({
-        error: "File too large for Bot API (>20MB). Deploy a GramJS/Telethon MTProto server.",
+        error: "File too large for Bot API (>20MB). Configure API_ID, API_HASH, and SESSION_STRING for MTProto streaming.",
         description: fileData.description,
       });
     }
@@ -961,7 +1181,7 @@ app.get("/stream", async (req, res) => {
         "Content-Range": `bytes ${start}-${end}/${fileSize}`,
         "Accept-Ranges": "bytes",
         "Content-Length": end - start + 1,
-        "Content-Type": "video/mp4",
+        "Content-Type": indexedRecord?.mime_type || "video/mp4",
         "Cache-Control": "public, max-age=3600",
       });
       https.get(downloadUrl, { headers: { Range: range } }, (pr) => pr.pipe(res))
@@ -969,7 +1189,7 @@ app.get("/stream", async (req, res) => {
     } else {
       https.get(downloadUrl, (pr) => {
         res.set({
-          "Content-Type": pr.headers["content-type"] || "application/octet-stream",
+          "Content-Type": indexedRecord?.mime_type || pr.headers["content-type"] || "application/octet-stream",
           "Content-Length": pr.headers["content-length"],
           "Accept-Ranges": "bytes",
           "Cache-Control": "public, max-age=3600",
@@ -1012,10 +1232,12 @@ async function start() {
     console.log(`👑 Admins: ${ADMINS.join(", ") || "(none)"}`);
     console.log(`🔐 Admin API key: ${ADMIN_API_KEY ? "✅ set" : "⚠️ NOT SET (open access)"}`);
     console.log(`🎬 TMDB auto-link: ${TMDB_API_KEY ? "✅ enabled" : "⚠️ disabled"}`);
+    console.log(`📺 MTProto streaming: ${hasMTProtoConfig ? "✅ configured" : "⚠️ disabled"}`);
   });
   const shutdown = async (signal) => {
     console.log(`\n${signal} — shutting down gracefully…`);
     server.close(async () => {
+      if (mtprotoClient) await mtprotoClient.disconnect().catch(() => {});
       await mongoClient.close();
       console.log("✅ Shutdown complete");
       process.exit(0);

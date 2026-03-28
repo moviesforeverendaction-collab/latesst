@@ -14,7 +14,7 @@ import { useStore, IndexedFile } from "../store/useStore";
 import { buildBackendUrl, fetchBackendJson, getBackendUrl, type BackendFilesResponse } from "../lib/backend";
 import ContentRow from "../components/ContentRow";
 import toast from "react-hot-toast";
-import { formatFileSize } from "../lib/telegram";
+import { buildTelegramDownloadLink, formatFileSize } from "../lib/telegram";
 
 export default function DetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -30,6 +30,7 @@ export default function DetailPage() {
   const [activeTab, setActiveTab] = useState<"overview" | "cast" | "seasons" | "download">("overview");
   const { addToWatchlist, removeFromWatchlist, isInWatchlist, telegramConfig } = useStore();
   const videoRef = useRef<HTMLIFrameElement>(null);
+  const hasLoadedFilesRef = useRef(false);
 
   const mediaType = location.pathname.startsWith("/tv") ? "tv" : "movie";
   const numId = parseInt(id || "0");
@@ -58,13 +59,21 @@ export default function DetailPage() {
       setAvailableFiles([]);
       setFilesError("");
       setFilesLoading(false);
+      hasLoadedFilesRef.current = false;
       return;
     }
 
-    const controller = new AbortController();
+    let cancelled = false;
+    let activeController: AbortController | null = null;
 
     const loadIndexedFiles = async () => {
-      setFilesLoading(true);
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+
+      if (!hasLoadedFilesRef.current) {
+        setFilesLoading(true);
+      }
       setFilesError("");
 
       try {
@@ -83,20 +92,40 @@ export default function DetailPage() {
           throw new Error(data.error || "Failed to load indexed files");
         }
 
-        setAvailableFiles(data.files);
+        if (!cancelled) {
+          setAvailableFiles(data.files);
+          hasLoadedFilesRef.current = true;
+        }
       } catch (e: unknown) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || cancelled) return;
         setAvailableFiles([]);
         setFilesError(String(e));
       } finally {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && !cancelled) {
           setFilesLoading(false);
         }
       }
     };
 
     loadIndexedFiles();
-    return () => controller.abort();
+    const intervalId = window.setInterval(loadIndexedFiles, 15000);
+    const handleFocus = () => loadIndexedFiles();
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        loadIndexedFiles();
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      cancelled = true;
+      activeController?.abort();
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [backendUrl, mediaType, numId]);
 
   if (loading) {
@@ -149,6 +178,7 @@ export default function DetailPage() {
     (a.episode ?? 0) - (b.episode ?? 0) ||
     (b.file_size ?? 0) - (a.file_size ?? 0)
   );
+  const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
 
   const handleWatchlist = () => {
     if (inList) {
@@ -172,8 +202,13 @@ export default function DetailPage() {
       return;
     }
 
-    const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
-    window.open(`https://t.me/${botUser}?start=dl_${mediaType}_${detail.id}`, "_blank");
+    window.open(
+      buildTelegramDownloadLink(botUser, {
+        mediaType,
+        tmdbId: detail.id,
+      }),
+      "_blank"
+    );
     toast.success("Redirecting to Telegram bot...", {
       style: { background: "#1a1a2e", color: "#fff" },
     });
@@ -536,8 +571,15 @@ export default function DetailPage() {
                               whileHover={{ scale: 1.1 }}
                               whileTap={{ scale: 0.95 }}
                               onClick={() => {
-                                const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
-                                window.open(`https://t.me/${botUser}?start=dl_tv_${detail.id}_s${season.season_number}_e${ep}`, "_blank");
+                                window.open(
+                                  buildTelegramDownloadLink(botUser, {
+                                    mediaType: "tv",
+                                    tmdbId: detail.id,
+                                    season: season.season_number,
+                                    episode: ep,
+                                  }),
+                                  "_blank"
+                                );
                               }}
                               className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 text-blue-400 rounded-lg text-xs font-medium transition-all flex items-center gap-1"
                             >
@@ -548,8 +590,14 @@ export default function DetailPage() {
                           {season.episode_count > 12 && (
                             <button
                               onClick={() => {
-                                const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
-                                window.open(`https://t.me/${botUser}?start=dl_tv_${detail.id}_s${season.season_number}`, "_blank");
+                                window.open(
+                                  buildTelegramDownloadLink(botUser, {
+                                    mediaType: "tv",
+                                    tmdbId: detail.id,
+                                    season: season.season_number,
+                                  }),
+                                  "_blank"
+                                );
                               }}
                               className="px-3 py-1.5 bg-white/5 border border-white/10 text-gray-400 rounded-lg text-xs transition-all hover:bg-white/10"
                             >
@@ -600,9 +648,14 @@ export default function DetailPage() {
                     <div className="space-y-2">
                       {sortedFiles.map((file) => {
                         const streamUrl = backendUrl
-                          ? buildBackendUrl(`/stream?file_id=${encodeURIComponent(file.file_id)}`, backendUrl)
+                          ? buildBackendUrl(
+                              `/stream?file_id=${encodeURIComponent(file.file_id)}&message_id=${encodeURIComponent(String(file.message_id))}&channel_id=${encodeURIComponent(file.channel_id)}`,
+                              backendUrl
+                            )
                           : "";
-                        const botUrl = `https://t.me/${telegramConfig.botUsername || "StreamyFlixServerBot"}?start=dl_${mediaType}_${detail.id}`;
+                        const botUrl = buildTelegramDownloadLink(botUser, {
+                          fileUniqueId: file.file_unique_id,
+                        });
 
                         return (
                           <motion.div
@@ -668,7 +721,11 @@ export default function DetailPage() {
                         {["1080p HD", "720p HD", "480p SD", "Full Batch"].map((quality) => (
                           <motion.a
                             key={quality}
-                            href={`https://t.me/${telegramConfig.botUsername || "StreamyFlixServerBot"}?start=dl_${mediaType}_${detail.id}_${quality.replace(/\s/g, "_").toLowerCase()}`}
+                            href={buildTelegramDownloadLink(botUser, {
+                              mediaType,
+                              tmdbId: detail.id,
+                              quality,
+                            })}
                             target="_blank"
                             rel="noopener noreferrer"
                             whileHover={{ scale: 1.02, x: 4 }}

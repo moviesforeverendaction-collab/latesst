@@ -462,7 +462,13 @@ export default function AdminPage() {
             <div className="space-y-3">
               {filteredLibrary.map((content) => {
                 const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
-                const downloadLink = buildTelegramDownloadLink(botUser, content.id);
+                const downloadLink = buildTelegramDownloadLink(botUser, {
+                  mediaType: content.mediaType,
+                  tmdbId: content.tmdbId,
+                  season: content.season,
+                  episode: content.episode,
+                  quality: content.quality,
+                });
 
                 return (
                   <motion.div

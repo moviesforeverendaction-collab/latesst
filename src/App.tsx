@@ -6,6 +6,7 @@ import { Toaster } from "react-hot-toast";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import SettingsModal from "./components/SettingsModal";
+import IndexedFilesSync from "./components/IndexedFilesSync";
 
 import HomePage from "./pages/HomePage";
 import MoviesPage from "./pages/MoviesPage";
@@ -34,6 +35,8 @@ export default function App() {
   return (
     <Router>
       <div className="min-h-screen bg-black text-white overflow-x-hidden">
+        <IndexedFilesSync />
+
         {/* Toast notifications */}
         <Toaster
           position="top-right"

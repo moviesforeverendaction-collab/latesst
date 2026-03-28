@@ -135,13 +135,55 @@ export class TelegramBot {
   }
 }
 
+export interface TelegramDownloadTarget {
+  mediaType: "movie" | "tv";
+  tmdbId: number;
+  season?: number;
+  episode?: number;
+  quality?: string;
+}
+
+export interface TelegramIndexedFileTarget {
+  fileUniqueId: string;
+}
+
 export function generateDownloadToken(contentId: string, userId: string) {
   const payload = `${contentId}:${userId}:${Date.now()}`;
   return btoa(payload);
 }
 
-export function buildTelegramDownloadLink(botUsername: string, contentId: string) {
-  return `https://t.me/${botUsername}?start=dl_${contentId}`;
+export function buildTelegramBotLink(botUsername: string) {
+  return `https://t.me/${botUsername}`;
+}
+
+function slugifyTelegramToken(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+export function buildTelegramDownloadStartParam(target: TelegramDownloadTarget | TelegramIndexedFileTarget | string) {
+  if (typeof target === "string") {
+    return `dl_${target}`;
+  }
+  if ("fileUniqueId" in target) {
+    return `dl_file_${target.fileUniqueId}`;
+  }
+
+  const parts = ["dl", target.mediaType, String(target.tmdbId)];
+  if (target.season) parts.push(`s${target.season}`);
+  if (target.episode) parts.push(`e${target.episode}`);
+  if (target.quality) {
+    const qualityToken = slugifyTelegramToken(target.quality);
+    if (qualityToken) parts.push(qualityToken);
+  }
+  return parts.join("_");
+}
+
+export function buildTelegramDownloadLink(botUsername: string, target: TelegramDownloadTarget | TelegramIndexedFileTarget | string) {
+  return `${buildTelegramBotLink(botUsername)}?start=${encodeURIComponent(buildTelegramDownloadStartParam(target))}`;
 }
 
 export function formatFileSize(bytes: number): string {

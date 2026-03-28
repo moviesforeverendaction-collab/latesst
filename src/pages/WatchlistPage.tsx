@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FiTrash2, FiPlay, FiCalendar, FiStar } from "react-icons/fi";
 import { FaTelegramPlane } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
+import { buildTelegramDownloadLink } from "../lib/telegram";
 import { useStore } from "../store/useStore";
 import { TMDB_IMG_W500 } from "../lib/tmdb";
 import toast from "react-hot-toast";
@@ -118,7 +119,10 @@ export default function WatchlistPage() {
                             Play
                           </button>
                           <a
-                            href={`https://t.me/${botUser}?start=dl_${item.mediaType}_${item.id}`}
+                            href={buildTelegramDownloadLink(botUser, {
+                              mediaType: item.mediaType,
+                              tmdbId: item.id,
+                            })}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}

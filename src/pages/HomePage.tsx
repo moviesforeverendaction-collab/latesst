@@ -2,17 +2,15 @@ import { useEffect, useState } from "react";
 import { tmdb, TMDBMovie } from "../lib/tmdb";
 import HeroBanner from "../components/HeroBanner";
 import ContentRow from "../components/ContentRow";
+import IndexedFilesRow from "../components/IndexedFilesRow";
 import { motion } from "framer-motion";
 import { FiTrendingUp, FiStar, FiClock, FiFilm } from "react-icons/fi";
-
-const STATS = [
-  { icon: FiFilm, label: "Movies", value: "10K+", color: "text-red-400" },
-  { icon: FiTrendingUp, label: "Trending", value: "Daily", color: "text-blue-400" },
-  { icon: FiStar, label: "Top Rated", value: "9.0+", color: "text-yellow-400" },
-  { icon: FiClock, label: "New Daily", value: "50+", color: "text-green-400" },
-];
+import { buildTelegramBotLink } from "../lib/telegram";
+import { useStore } from "../store/useStore";
+import { getBackendUrl } from "../lib/backend";
 
 export default function HomePage() {
+  const { telegramConfig, indexedFiles } = useStore();
   const [trending, setTrending] = useState<TMDBMovie[]>([]);
   const [popular, setPopular] = useState<TMDBMovie[]>([]);
   const [topRated, setTopRated] = useState<TMDBMovie[]>([]);
@@ -21,6 +19,17 @@ export default function HomePage() {
   const [topRatedTV, setTopRatedTV] = useState<TMDBMovie[]>([]);
   const [upcoming, setUpcoming] = useState<TMDBMovie[]>([]);
   const [loading, setLoading] = useState(true);
+  const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
+  const botUrl = buildTelegramBotLink(botUser);
+  const channelUrl = telegramConfig.forceSubChannelLink || botUrl;
+  const backendUrl = getBackendUrl(telegramConfig.backendUrl);
+  const latestIndexedFiles = indexedFiles.slice(0, 18);
+  const stats = [
+    { icon: FiFilm, label: "Indexed Files", value: indexedFiles.length ? `${indexedFiles.length}+` : "Live", color: "text-red-400" },
+    { icon: FiTrendingUp, label: "Sync", value: backendUrl ? "15s" : "Off", color: "text-blue-400" },
+    { icon: FiStar, label: "Top Rated", value: "9.0+", color: "text-yellow-400" },
+    { icon: FiClock, label: "Latest Index", value: latestIndexedFiles[0] ? new Date(latestIndexedFiles[0].indexed_at).toLocaleDateString() : "Waiting", color: "text-green-400" },
+  ];
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -77,7 +86,7 @@ export default function HomePage() {
             transition={{ delay: 0.5 }}
             className="grid grid-cols-2 sm:grid-cols-4 gap-3"
           >
-            {STATS.map(({ icon: Icon, label, value, color }) => (
+            {stats.map(({ icon: Icon, label, value, color }) => (
               <div
                 key={label}
                 className="bg-gray-900/80 backdrop-blur-xl border border-white/10 rounded-2xl p-4 flex items-center gap-3"
@@ -97,6 +106,14 @@ export default function HomePage() {
 
       {/* Content Rows */}
       <div className="space-y-8 pb-20">
+        {latestIndexedFiles.length > 0 && (
+          <IndexedFilesRow
+            title="🆕 Latest Indexed Files"
+            subtitle="Every new file indexed by the bot is synced to the website automatically."
+            files={latestIndexedFiles}
+          />
+        )}
+
         <ContentRow title="🔥 Trending This Week" movies={trending} loading={loading} showRank={false} />
         <ContentRow title="🎬 Now Playing" movies={nowPlaying} loading={loading} />
         <ContentRow title="🏆 Top Rated Movies" movies={topRated} loading={loading} showRank />
@@ -136,7 +153,7 @@ export default function HomePage() {
                 </div>
                 <div className="flex flex-col gap-3 w-full lg:w-auto">
                   <a
-                    href="https://t.me/StreamyFlixServerBot"
+                    href={botUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center justify-center gap-3 px-8 py-4 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl transition-all shadow-lg shadow-blue-500/30 text-center"
@@ -147,7 +164,7 @@ export default function HomePage() {
                     Start Bot & Download
                   </a>
                   <a
-                    href="https://t.me/StreamyFlixServerBot"
+                    href={channelUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center justify-center gap-2 px-8 py-3 bg-white/5 hover:bg-white/10 text-gray-300 font-medium rounded-xl transition-all border border-white/10 text-sm"

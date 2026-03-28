@@ -41,8 +41,12 @@ export interface IndexedFile {
   episode?: number;
   duration?: number;
   indexed_at: string;
+  updated_at?: string;
   download_count: number;
   thumb?: string;
+  poster?: string | null;
+  year?: number | null;
+  genres?: number[];
 }
 
 export interface LocalContent {

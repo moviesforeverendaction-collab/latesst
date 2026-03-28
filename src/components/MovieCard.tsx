@@ -4,6 +4,7 @@ import { FiPlay, FiPlus, FiCheck, FiStar, FiInfo } from "react-icons/fi";
 import { FaTelegramPlane } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import { TMDBMovie, TMDB_IMG_W500, TMDB_IMG_W300, GENRES } from "../lib/tmdb";
+import { buildTelegramDownloadLink } from "../lib/telegram";
 import { useStore } from "../store/useStore";
 import toast from "react-hot-toast";
 
@@ -18,7 +19,7 @@ export default function MovieCard({ movie, index = 0, size = "md", showRank = fa
   const [hovered, setHovered] = useState(false);
   const [imageError, setImageError] = useState(false);
   const navigate = useNavigate();
-  const { addToWatchlist, removeFromWatchlist, isInWatchlist } = useStore();
+  const { addToWatchlist, removeFromWatchlist, isInWatchlist, telegramConfig } = useStore();
 
   const title = movie.title || movie.name || "Unknown";
   const mediaType = movie.media_type || (movie.title ? "movie" : "tv");
@@ -52,7 +53,14 @@ export default function MovieCard({ movie, index = 0, size = "md", showRank = fa
   const handleClick = () => navigate(`/${mediaType}/${movie.id}`);
   const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation();
-    window.open(`https://t.me/StreamyFlixServerBot?start=dl_${mediaType}_${movie.id}`, "_blank");
+    const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
+    window.open(
+      buildTelegramDownloadLink(botUser, {
+        mediaType: mediaType as "movie" | "tv",
+        tmdbId: movie.id,
+      }),
+      "_blank"
+    );
   };
 
   const sizeClasses = {

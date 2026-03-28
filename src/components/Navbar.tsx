@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FiSearch, FiX, FiBell, FiMenu, FiSettings, FiUser, FiBookmark, FiLogOut } from "react-icons/fi";
 import { FaTelegramPlane } from "react-icons/fa";
 import { Link, useNavigate, useLocation } from "react-router-dom";
+import { buildTelegramBotLink } from "../lib/telegram";
 import { useStore } from "../store/useStore";
 
 interface NavbarProps {
@@ -18,7 +19,9 @@ export default function Navbar({ onSettingsOpen }: NavbarProps) {
   const searchRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { watchlist, isAdminMode } = useStore();
+  const { watchlist, isAdminMode, telegramConfig } = useStore();
+  const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
+  const botUrl = buildTelegramBotLink(botUser);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);
@@ -177,7 +180,7 @@ export default function Navbar({ onSettingsOpen }: NavbarProps) {
 
               {/* Telegram Link */}
               <motion.a
-                href="https://t.me/StreamyFlixServerBot"
+                href={botUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 whileHover={{ scale: 1.1 }}
@@ -297,7 +300,7 @@ export default function Navbar({ onSettingsOpen }: NavbarProps) {
                 </Link>
               ))}
               <a
-                href="https://t.me/StreamyFlixServerBot"
+                href={botUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 px-4 py-3 rounded-lg text-blue-400 hover:bg-blue-500/10 text-sm font-medium"

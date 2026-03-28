@@ -2,9 +2,15 @@ import { motion } from "framer-motion";
 import { FaTelegramPlane, FaGithub, FaTwitter } from "react-icons/fa";
 import { FiMail, FiShield, FiHeart } from "react-icons/fi";
 import { Link } from "react-router-dom";
+import { buildTelegramBotLink } from "../lib/telegram";
+import { useStore } from "../store/useStore";
 
 export default function Footer() {
   const year = new Date().getFullYear();
+  const { telegramConfig } = useStore();
+  const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
+  const botUrl = buildTelegramBotLink(botUser);
+  const channelUrl = telegramConfig.forceSubChannelLink || botUrl;
 
   return (
     <footer className="bg-black border-t border-white/5">
@@ -26,7 +32,7 @@ export default function Footer() {
             </p>
             <div className="flex gap-3">
               <motion.a
-                href="https://t.me/StreamyFlixServerBot"
+                href={botUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 whileHover={{ scale: 1.1 }}
@@ -76,10 +82,10 @@ export default function Footer() {
             <h4 className="text-white font-semibold text-sm mb-4 uppercase tracking-wider">Telegram</h4>
             <ul className="space-y-2.5">
               {[
-                { label: "Download Bot", href: "https://t.me/StreamyFlixServerBot" },
-                { label: "Join Channel", href: "https://t.me/StreamyFlixServerBot" },
-                { label: "Get Updates", href: "https://t.me/StreamyFlixServerBot" },
-                { label: "Support", href: "https://t.me/StreamyFlixServerBot" },
+                { label: "Download Bot", href: botUrl },
+                { label: "Join Channel", href: channelUrl },
+                { label: "Get Updates", href: channelUrl },
+                { label: "Support", href: botUrl },
               ].map(({ label, href }) => (
                 <li key={label}>
                   <a

@@ -4,6 +4,7 @@ import { FiPlay, FiInfo, FiPlus, FiCheck, FiVolume2, FiVolumeX, FiStar } from "r
 import { FaTelegramPlane } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import { TMDBMovie, TMDB_IMG_ORIGINAL, TMDB_IMG_W500, GENRES } from "../lib/tmdb";
+import { buildTelegramDownloadLink } from "../lib/telegram";
 import { useStore } from "../store/useStore";
 import toast from "react-hot-toast";
 
@@ -15,7 +16,7 @@ export default function HeroBanner({ movies }: HeroBannerProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [muted, setMuted] = useState(true);
   const navigate = useNavigate();
-  const { watchlist, addToWatchlist, removeFromWatchlist, isInWatchlist } = useStore();
+  const { watchlist, addToWatchlist, removeFromWatchlist, isInWatchlist, telegramConfig } = useStore();
 
   const current = movies[currentIndex];
 
@@ -35,6 +36,7 @@ export default function HeroBanner({ movies }: HeroBannerProps) {
   const rating = current.vote_average.toFixed(1);
   const genres = current.genre_ids?.slice(0, 3).map((id) => GENRES[id]).filter(Boolean) || [];
   const inList = isInWatchlist(current.id);
+  const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
 
   const handleWatchlist = () => {
     if (inList) {
@@ -167,7 +169,10 @@ export default function HeroBanner({ movies }: HeroBannerProps) {
                   </motion.button>
 
                   <motion.a
-                    href="https://t.me/StreamyFlixServerBot"
+                    href={buildTelegramDownloadLink(botUser, {
+                      mediaType: mediaType as "movie" | "tv",
+                      tmdbId: current.id,
+                    })}
                     target="_blank"
                     rel="noopener noreferrer"
                     whileHover={{ scale: 1.05 }}
