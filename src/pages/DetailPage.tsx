@@ -10,9 +10,11 @@ import {
   tmdb, TMDBDetail, TMDBVideo, TMDBCast,
   TMDB_IMG_ORIGINAL, TMDB_IMG_W500, TMDB_IMG_W300,
 } from "../lib/tmdb";
-import { useStore } from "../store/useStore";
+import { useStore, IndexedFile } from "../store/useStore";
+import { buildBackendUrl, fetchBackendJson, getBackendUrl, type BackendFilesResponse } from "../lib/backend";
 import ContentRow from "../components/ContentRow";
 import toast from "react-hot-toast";
+import { formatFileSize } from "../lib/telegram";
 
 export default function DetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -20,6 +22,9 @@ export default function DetailPage() {
   const location = useLocation();
   const [detail, setDetail] = useState<TMDBDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [availableFiles, setAvailableFiles] = useState<IndexedFile[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState("");
   const [trailerOpen, setTrailerOpen] = useState(false);
   const [selectedSeason, setSelectedSeason] = useState(1);
   const [activeTab, setActiveTab] = useState<"overview" | "cast" | "seasons" | "download">("overview");
@@ -28,6 +33,7 @@ export default function DetailPage() {
 
   const mediaType = location.pathname.startsWith("/tv") ? "tv" : "movie";
   const numId = parseInt(id || "0");
+  const backendUrl = getBackendUrl(telegramConfig.backendUrl);
 
   useEffect(() => {
     if (!id) return;
@@ -46,6 +52,52 @@ export default function DetailPage() {
     load();
     window.scrollTo(0, 0);
   }, [id, mediaType, numId]);
+
+  useEffect(() => {
+    if (!numId || !backendUrl) {
+      setAvailableFiles([]);
+      setFilesError("");
+      setFilesLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const loadIndexedFiles = async () => {
+      setFilesLoading(true);
+      setFilesError("");
+
+      try {
+        const params = new URLSearchParams({
+          tmdb_id: String(numId),
+          type: mediaType,
+          limit: mediaType === "tv" ? "50" : "20",
+        });
+        const data = await fetchBackendJson<BackendFilesResponse<IndexedFile>>(
+          `/api/files?${params.toString()}`,
+          { signal: controller.signal },
+          backendUrl
+        );
+
+        if (!data.ok) {
+          throw new Error(data.error || "Failed to load indexed files");
+        }
+
+        setAvailableFiles(data.files);
+      } catch (e: unknown) {
+        if (controller.signal.aborted) return;
+        setAvailableFiles([]);
+        setFilesError(String(e));
+      } finally {
+        if (!controller.signal.aborted) {
+          setFilesLoading(false);
+        }
+      }
+    };
+
+    loadIndexedFiles();
+    return () => controller.abort();
+  }, [backendUrl, mediaType, numId]);
 
   if (loading) {
     return (
@@ -92,6 +144,11 @@ export default function DetailPage() {
     ...(detail.recommendations?.results || []),
     ...(detail.similar?.results || []),
   ].filter((m, i, arr) => arr.findIndex((x) => x.id === m.id) === i).slice(0, 15);
+  const sortedFiles = [...availableFiles].sort((a, b) =>
+    (a.season ?? 0) - (b.season ?? 0) ||
+    (a.episode ?? 0) - (b.episode ?? 0) ||
+    (b.file_size ?? 0) - (a.file_size ?? 0)
+  );
 
   const handleWatchlist = () => {
     if (inList) {
@@ -109,6 +166,12 @@ export default function DetailPage() {
   };
 
   const handleDownload = () => {
+    if (availableFiles.length > 0) {
+      setActiveTab("download");
+      toast.success(`Found ${availableFiles.length} indexed file${availableFiles.length === 1 ? "" : "s"} for this title.`);
+      return;
+    }
+
     const botUser = telegramConfig.botUsername || "StreamyFlixServerBot";
     window.open(`https://t.me/${botUser}?start=dl_${mediaType}_${detail.id}`, "_blank");
     toast.success("Redirecting to Telegram bot...", {
@@ -513,31 +576,116 @@ export default function DetailPage() {
                 <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-2xl space-y-3">
                   <h3 className="text-white font-bold text-lg flex items-center gap-2">
                     <FaTelegramPlane className="w-5 h-5 text-blue-400" />
-                    Download via Telegram Bot
+                    Indexed Downloads
                   </h3>
                   <p className="text-gray-300 text-sm">
-                    Files are securely stored on Telegram. Click the button below to open our bot and request your download. The bot will send you the file directly.
+                    {backendUrl
+                      ? "This list is loaded live from your indexed files API. Use Stream for direct backend playback, or fall back to Telegram bot delivery."
+                      : "Set VITE_API_URL or a backend URL in Config to load real indexed files here. Telegram bot links still work as a fallback."}
                   </p>
-                  <div className="space-y-2">
-                    {["1080p HD", "720p HD", "480p SD", "Full Batch"].map((quality) => (
-                      <motion.a
-                        key={quality}
-                        href={`https://t.me/${telegramConfig.botUsername || "StreamyFlixServerBot"}?start=dl_${mediaType}_${detail.id}_${quality.replace(/\s/g, "_").toLowerCase()}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        whileHover={{ scale: 1.02, x: 4 }}
-                        className="flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white transition-all group"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-blue-500/20 border border-blue-500/30 rounded-lg flex items-center justify-center">
-                            <FiDownload className="w-4 h-4 text-blue-400" />
-                          </div>
-                          <span className="font-medium text-sm">{title} — {quality}</span>
-                        </div>
-                        <FaTelegramPlane className="w-4 h-4 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-                      </motion.a>
-                    ))}
-                  </div>
+
+                  {backendUrl && (
+                    <p className="text-cyan-400 text-xs font-mono break-all">
+                      Source: {backendUrl}/api/files?tmdb_id={detail.id}
+                    </p>
+                  )}
+
+                  {filesLoading ? (
+                    <div className="space-y-2">
+                      {Array.from({ length: 3 }).map((_, index) => (
+                        <div key={index} className="h-20 rounded-xl bg-white/5 animate-pulse" />
+                      ))}
+                    </div>
+                  ) : sortedFiles.length > 0 ? (
+                    <div className="space-y-2">
+                      {sortedFiles.map((file) => {
+                        const streamUrl = backendUrl
+                          ? buildBackendUrl(`/stream?file_id=${encodeURIComponent(file.file_id)}`, backendUrl)
+                          : "";
+                        const botUrl = `https://t.me/${telegramConfig.botUsername || "StreamyFlixServerBot"}?start=dl_${mediaType}_${detail.id}`;
+
+                        return (
+                          <motion.div
+                            key={file.file_unique_id}
+                            whileHover={{ scale: 1.01 }}
+                            className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white transition-all space-y-3"
+                          >
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium text-sm">{file.file_name || file.title || title}</span>
+                                <span className="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full">{file.quality || "Unknown quality"}</span>
+                                {file.season && (
+                                  <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full">
+                                    S{file.season}{file.episode ? `E${file.episode}` : ""}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 flex-wrap text-[11px] text-gray-400">
+                                <span>{file.language || "Unknown language"}</span>
+                                <span>{formatFileSize(file.file_size || 0)}</span>
+                                <span>{new Date(file.indexed_at).toLocaleDateString()}</span>
+                                <span>{file.download_count} downloads</span>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              {streamUrl && (
+                                <a
+                                  href={streamUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold transition-all"
+                                >
+                                  <FiPlay className="w-3.5 h-3.5" />
+                                  Stream
+                                </a>
+                              )}
+                              <a
+                                href={botUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-2 px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 text-blue-300 rounded-lg text-xs font-semibold transition-all"
+                              >
+                                <FaTelegramPlane className="w-3.5 h-3.5" />
+                                Open Bot
+                              </a>
+                            </div>
+                          </motion.div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filesError && (
+                        <p className="text-red-300 text-xs">
+                          Could not load indexed files: {filesError}
+                        </p>
+                      )}
+                      <p className="text-gray-300 text-sm">
+                        No indexed files were found for this TMDB entry yet, so the page is falling back to the Telegram bot.
+                      </p>
+                      <div className="space-y-2">
+                        {["1080p HD", "720p HD", "480p SD", "Full Batch"].map((quality) => (
+                          <motion.a
+                            key={quality}
+                            href={`https://t.me/${telegramConfig.botUsername || "StreamyFlixServerBot"}?start=dl_${mediaType}_${detail.id}_${quality.replace(/\s/g, "_").toLowerCase()}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            whileHover={{ scale: 1.02, x: 4 }}
+                            className="flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white transition-all group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 bg-blue-500/20 border border-blue-500/30 rounded-lg flex items-center justify-center">
+                                <FiDownload className="w-4 h-4 text-blue-400" />
+                              </div>
+                              <span className="font-medium text-sm">{title} — {quality}</span>
+                            </div>
+                            <FaTelegramPlane className="w-4 h-4 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </motion.a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-4 bg-gray-900/50 border border-white/5 rounded-2xl text-xs text-gray-500 space-y-1">
