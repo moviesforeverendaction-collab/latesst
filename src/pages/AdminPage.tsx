@@ -4,6 +4,7 @@ import { FiPlus, FiTrash2, FiSearch, FiDownload, FiX, FiSave, FiRefreshCw, FiDat
 import { FaTelegramPlane } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import { useStore, LocalContent, IndexedFile } from "../store/useStore";
+import { buildBackendUrl, fetchBackendJson, getBackendUrl, type BackendFilesResponse } from "../lib/backend";
 import { tmdb } from "../lib/tmdb";
 import { TMDB_IMG_W300 } from "../lib/tmdb";
 import { buildTelegramDownloadLink } from "../lib/telegram";
@@ -40,8 +41,9 @@ export default function AdminPage() {
   const [linkTmdbResults, setLinkTmdbResults] = useState<TMDBSearchResult[]>([]);
   const [linkSearching, setLinkSearching] = useState(false);
 
-  const backendUrl = telegramConfig.backendUrl?.trim();
+  const backendUrl = getBackendUrl(telegramConfig.backendUrl);
   const adminApiKey = telegramConfig.adminApiKey?.trim();
+  const usingEnvBackend = !telegramConfig.backendUrl?.trim() && !!backendUrl;
 
   // Helper: headers with optional admin key
   const adminHeaders = (): Record<string, string> => ({
@@ -52,14 +54,12 @@ export default function AdminPage() {
   // Fetch indexed files from backend
   const fetchIndexedFiles = async () => {
     if (!backendUrl) {
-      toast.error("Backend URL not configured. Go to Config → Bot API tab.");
+      toast.error("Backend URL not configured. Set VITE_API_URL or go to Config → Bot API tab.");
       return;
     }
     setFetchingFiles(true);
     try {
-      const res = await fetch(`${backendUrl}/api/files?limit=200`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await fetchBackendJson<BackendFilesResponse<IndexedFile>>("/api/files?limit=200", undefined, backendUrl);
       if (data.ok) {
         setIndexedFiles(data.files);
         toast.success(`✅ Loaded ${data.files.length} indexed files`);
@@ -68,8 +68,9 @@ export default function AdminPage() {
       }
     } catch (e: unknown) {
       toast.error(`❌ Failed to fetch: ${String(e)}`);
+    } finally {
+      setFetchingFiles(false);
     }
-    setFetchingFiles(false);
   };
 
   // Delete indexed file from backend + local store
@@ -78,7 +79,7 @@ export default function AdminPage() {
     if (!confirm(`Delete "${file.title || file.file_name}" from the index?`)) return;
     try {
       const id = file._id || file.file_unique_id;
-      const res = await fetch(`${backendUrl}/api/file/${encodeURIComponent(id)}`, {
+      const res = await fetch(buildBackendUrl(`/api/file/${encodeURIComponent(id)}`, backendUrl), {
         method: "DELETE",
         headers: adminHeaders(),
       });
@@ -98,7 +99,7 @@ export default function AdminPage() {
   const handleLinkFile = async (tmdbResult: TMDBSearchResult) => {
     if (!linkingFile || !backendUrl) return;
     try {
-      const res = await fetch(`${backendUrl}/api/link`, {
+      const res = await fetch(buildBackendUrl("/api/link", backendUrl), {
         method: "POST",
         headers: adminHeaders(),
         body: JSON.stringify({
@@ -127,7 +128,7 @@ export default function AdminPage() {
       fetchIndexedFiles();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminMode]);
+  }, [backendUrl, isAdminMode]);
 
   const [form, setForm] = useState({
     telegramFileId: "",
@@ -335,6 +336,9 @@ export default function AdminPage() {
                   Bot Indexed Files
                 </h2>
                 <p className="text-gray-500 text-xs mt-0.5">Files auto-indexed by your bot from the private channel</p>
+                {usingEnvBackend && (
+                  <p className="text-cyan-500 text-xs mt-1 font-mono">Using VITE_API_URL fallback: {backendUrl}</p>
+                )}
               </div>
               <div className="flex gap-2">
                 {!backendUrl && (
@@ -360,7 +364,7 @@ export default function AdminPage() {
               <div className="py-16 text-center space-y-3">
                 <p className="text-4xl">🔗</p>
                 <p className="text-white font-semibold">Backend URL not configured</p>
-                <p className="text-gray-500 text-sm">Go to <strong>Config → Bot API tab</strong> and set your Backend API URL to load indexed files.</p>
+                <p className="text-gray-500 text-sm">Set <strong>VITE_API_URL</strong> or go to <strong>Config → Bot API tab</strong> and enter your backend URL to load indexed files.</p>
                 <button onClick={() => navigate("/config")} className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-sm font-bold transition-all">
                   Open Config
                 </button>
