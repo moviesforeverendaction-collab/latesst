@@ -2,13 +2,12 @@
  * StreamyFlix Bot — Advanced Production Build v2.0 (FIXED)
  *
  * ✅ All bugs from your logs fixed:
- *    • download_count path conflict completely removed
- *    • Index conflicts on startup fixed (safe drop + recreate)
- *    • Broken template literals fixed
- *    • One-time old index migration added
- *    • Content hash syntax fixed
+ * • download_count path conflict completely removed
+ * • Index conflicts on startup fixed (safe drop + recreate)
+ * • Broken template literals fixed
+ * • One-time old index migration added
+ * • Content hash syntax fixed
  */
-
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -16,7 +15,6 @@ const { MongoClient, ObjectId } = require("mongodb");
 const TelegramBot = require("node-telegram-bot-api");
 const https = require("https");
 const crypto = require("crypto");
-
 // ─── Config ──────────────────────────────────────────────────────────────────
 const {
   BOT_TOKEN,
@@ -34,14 +32,11 @@ const {
   INDEX_BATCH_SIZE = "200",
   RATE_LIMIT_MS = "60",
 } = process.env;
-
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN is required");
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
-
 const ADMINS = ADMIN_USER_IDS.split(",").map(Number).filter(Boolean);
 const BATCH_SIZE = parseInt(INDEX_BATCH_SIZE) || 200;
 const RATE_LIMIT = parseInt(RATE_LIMIT_MS) || 60;
-
 // ─── MongoDB ─────────────────────────────────────────────────────────────────
 let db, filesCol, usersCol, cacheCol;
 const mongoClient = new MongoClient(MONGO_URI, {
@@ -49,19 +44,16 @@ const mongoClient = new MongoClient(MONGO_URI, {
   serverSelectionTimeoutMS: 10000,
   retryWrites: true,
 });
-
 async function connectDB() {
   await mongoClient.connect();
   db = mongoClient.db(MONGO_DB);
   filesCol = db.collection(MONGO_COLLECTION);
   usersCol = db.collection("users");
   cacheCol = db.collection("tmdb_cache");
-
   // One-time migration: drop old auto-generated indexes from v1 (safe to run every restart)
   await filesCol.dropIndex("file_unique_id_1").catch(() => {});
   await filesCol.dropIndex("tmdb_id_1").catch(() => {});
   await filesCol.dropIndex("media_type_1").catch(() => {});
-
   // ── Indexes (all idempotent — safe to call on every restart) ─────────────
   await safeCreateIndex(filesCol, { file_unique_id: 1 }, { unique: true, name: "uidx_unique" });
   await safeCreateIndex(filesCol, { tmdb_id: 1 }, { name: "uidx_tmdb" });
@@ -73,7 +65,6 @@ async function connectDB() {
   await safeCreateIndex(filesCol, { indexed_at: -1 }, { name: "uidx_date" });
   await safeCreateIndex(filesCol, { download_count: -1 }, { name: "uidx_dl" });
   await safeCreateIndex(filesCol, { channel_id: 1, message_id: 1 }, { name: "uidx_msg" });
-
   // Full-text search (language_override fix)
   await safeCreateIndex(
     filesCol,
@@ -85,17 +76,13 @@ async function connectDB() {
       language_override: "search_lang",
     }
   );
-
   // TMDB cache — TTL 7 days
   await safeCreateIndex(cacheCol, { tmdb_id: 1, media_type: 1 }, { name: "cache_tmdb", unique: true });
   await safeCreateIndex(cacheCol, { fetched_at: 1 }, { name: "cache_ttl", expireAfterSeconds: 604800 });
-
   // Users
   await safeCreateIndex(usersCol, { user_id: 1 }, { name: "uidx_user", unique: true });
-
   console.log(`✅ MongoDB connected: ${MONGO_DB}.${MONGO_COLLECTION}`);
 }
-
 /**
  * Creates a MongoDB index safely.
  * Handles both option conflicts and "index not found" errors.
@@ -119,21 +106,16 @@ async function safeCreateIndex(col, spec, opts = {}) {
     }
   }
 }
-
 mongoClient.on("error", async (e) => {
   console.error("MongoDB error:", e.message);
   try { await connectDB(); } catch {}
 });
-
 // ─── Telegram Bot ─────────────────────────────────────────────────────────────
 const isWebhook = !!WEBHOOK_URL;
 const bot = new TelegramBot(BOT_TOKEN, { polling: !isWebhook });
-
 function isAdmin(userId) { return ADMINS.includes(userId); }
-
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 async function retry(fn, retries = 3, baseDelay = 1000) {
   for (let i = 0; i < retries; i++) {
     try { return await fn(); }
@@ -146,12 +128,10 @@ async function retry(fn, retries = 3, baseDelay = 1000) {
     }
   }
 }
-
 function progressBar(pct) {
   const f = Math.round(pct / 10);
   return "█".repeat(f) + "░".repeat(10 - f);
 }
-
 // ─── Simple serial queue ──────────────────────────────────────────────────────
 class Queue {
   constructor(concurrency = 1) {
@@ -174,7 +154,6 @@ class Queue {
   }
 }
 const forwardQueue = new Queue(1);
-
 // ─── File Parser ──────────────────────────────────────────────────────────────
 const QUALITY_PATTERNS = [
   { re: /\b(2160p|4k|uhd)\b/i, label: "4K UHD" },
@@ -188,7 +167,6 @@ const QUALITY_PATTERNS = [
   { re: /\bWEBRIP|WEB-DL\b/i, label: "WEB-DL" },
   { re: /\bDVDRIP|DVDR\b/i, label: "DVDRip" },
 ];
-
 const LANGUAGE_MAP = [
   { re: /\bdual.?audio\b/i, label: "Dual Audio" },
   { re: /\bmulti.?audio\b/i, label: "Multi Audio" },
@@ -209,7 +187,6 @@ const LANGUAGE_MAP = [
   { re: /\brussian\b/i, label: "Russian" },
   { re: /\barabic\b/i, label: "Arabic" },
 ];
-
 const HDR_MAP = [
   { re: /\bDolby.?Vision|DV\b/i, label: "Dolby Vision" },
   { re: /\bHDR10+/i, label: "HDR10+" },
@@ -217,7 +194,6 @@ const HDR_MAP = [
   { re: /\bHDR\b/i, label: "HDR" },
   { re: /\bSDR\b/i, label: "SDR" },
 ];
-
 const CODEC_MAP = [
   { re: /\bx265|HEVC\b/i, label: "x265/HEVC" },
   { re: /\bx264|AVC\b/i, label: "x264/AVC" },
@@ -225,7 +201,6 @@ const CODEC_MAP = [
   { re: /\bVP9\b/i, label: "VP9" },
   { re: /\bXVID\b/i, label: "XviD" },
 ];
-
 const AUDIO_MAP = [
   { re: /\bDolby.?Atmos\b/i, label: "Atmos" },
   { re: /\bDTS.?HD\b/i, label: "DTS-HD" },
@@ -236,19 +211,16 @@ const AUDIO_MAP = [
   { re: /\bFLAC\b/i, label: "FLAC" },
   { re: /\bMP3\b/i, label: "MP3" },
 ];
-
 function matchFirst(str, patterns) {
   for (const { re, label } of patterns) {
     if (re.test(str)) return label;
   }
   return null;
 }
-
 function extractYear(str) {
   const m = str.match(/\b(19[4-9]\d|20[0-3]\d)\b/);
   return m ? parseInt(m[1]) : null;
 }
-
 function extractFileInfo(msg) {
   let fileObj = null, fileType = "unknown";
   if (msg.document) { fileObj = msg.document; fileType = "document"; }
@@ -256,20 +228,16 @@ function extractFileInfo(msg) {
   else if (msg.audio) { fileObj = msg.audio; fileType = "audio"; }
   else if (msg.animation) { fileObj = msg.animation; fileType = "animation"; }
   if (!fileObj) return null;
-
   const rawCaption = msg.caption || "";
   const fileName = fileObj.file_name || (rawCaption.length < 200 ? rawCaption : null) || "Untitled";
-
   const quality = matchFirst(fileName, QUALITY_PATTERNS) || "Unknown";
   const language = matchFirst(fileName, LANGUAGE_MAP) || "Unknown";
   const hdr = matchFirst(fileName, HDR_MAP) || null;
   const codec = matchFirst(fileName, CODEC_MAP) || null;
   const audio_format = matchFirst(fileName, AUDIO_MAP) || null;
   const year = extractYear(fileName);
-
   const releaseGroupMatch = fileName.match(/[-$ ]([A-Za-z0-9]+) ?$/);
   const release_group = releaseGroupMatch ? releaseGroupMatch[1] : null;
-
   // Season / Episode
   let season = null, episode = null;
   const seMatch = fileName.match(/S(\d{1,3})\s*E(\d{1,4})/i);
@@ -282,14 +250,12 @@ function extractFileInfo(msg) {
     const eMatch = fileName.match(/Episode\s*(\d{1,4})/i);
     if (eMatch && season) episode = parseInt(eMatch[1]);
   }
-
   const is_episode_pack = /E\d+-E\d+|complete.?series|full.?season/i.test(fileName);
   const media_type = (season !== null || /series|S\d{1,3}/i.test(fileName)) ? "tv" : "movie";
-
   // Clean title
   let title = fileName
     .replace(/\.(mkv|mp4|avi|mov|webm|flv|wmv|ts|m4v|m2ts)$/i, "")
-    .replace(/[ \(][^\[ ()]*[])]/g, " ")
+    .replace(/\s*[\(\[][^)\]]+[\)\]]/g, " ")
     .replace(/\b(19[4-9]\d|20[0-3]\d)\b.*/i, "")
     .replace(/\d{3,4}p.*/i, "")
     .replace(/S\d{1,3}E\d{1,4}.*/i, "")
@@ -297,13 +263,11 @@ function extractFileInfo(msg) {
     .replace(/[._-]+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
-
   // FIXED: content hash (was broken in original paste)
   const contentHash = crypto
     .createHash("md5")
     .update(`${fileName}|${fileObj.file_size || 0}`)
     .digest("hex");
-
   return {
     file_id: fileObj.file_id,
     file_unique_id: fileObj.file_unique_id,
@@ -334,7 +298,6 @@ function extractFileInfo(msg) {
     thumb: fileObj.thumb?.file_id || fileObj.thumbnail?.file_id || null,
   };
 }
-
 function reparseRecord(existing) {
   const fakeFileKey = existing.file_type === "video" ? "video" : "document";
   const fresh = extractFileInfo({
@@ -369,7 +332,6 @@ function reparseRecord(existing) {
     updated_at: new Date().toISOString(),
   };
 }
-
 // ─── TMDB ─────────────────────────────────────────────────────────────────────
 async function fetchTMDB(path) {
   if (!TMDB_API_KEY) return null;
@@ -382,7 +344,6 @@ async function fetchTMDB(path) {
     }).on("error", () => resolve(null));
   });
 }
-
 async function autoLinkTMDB(fileInfo) {
   if (!TMDB_API_KEY || !fileInfo.title) return null;
   const query = encodeURIComponent(fileInfo.title);
@@ -401,7 +362,6 @@ async function autoLinkTMDB(fileInfo) {
   ).catch(() => {});
   return { tmdb_id: tmdbId, title: match.title || match.name, poster, genres };
 }
-
 // ─── Index file (FIXED - no more download_count conflict) ─────────────────────
 async function indexFile(fileInfo, { autoTmdb = false } = {}) {
   try {
@@ -415,12 +375,9 @@ async function indexFile(fileInfo, { autoTmdb = false } = {}) {
         if (!fileInfo.title || fileInfo.title.length < 3) extra.title = t.title;
       }
     }
-
     const doc = { ...fileInfo, ...extra, updated_at: new Date().toISOString() };
-
     // CRITICAL FIX: Remove download_count from $set
     const { download_count, ...setDoc } = doc;
-
     const result = await filesCol.updateOne(
       { file_unique_id: fileInfo.file_unique_id },
       {
@@ -429,7 +386,6 @@ async function indexFile(fileInfo, { autoTmdb = false } = {}) {
       },
       { upsert: true }
     );
-
     return {
       ok: true,
       upserted: !!result.upsertedId,
@@ -441,13 +397,11 @@ async function indexFile(fileInfo, { autoTmdb = false } = {}) {
     return { ok: false, error: e.message };
   }
 }
-
 // ─── Bot: /start ──────────────────────────────────────────────────────────────
 bot.onText(/\/start(.*)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const param = (match[1] || "").trim();
-
   usersCol.updateOne(
     { user_id: userId },
     {
@@ -457,7 +411,6 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
     },
     { upsert: true }
   ).catch(() => {});
-
   if (param.startsWith("dl_")) {
     if (CHANNEL_ID) {
       try {
@@ -471,7 +424,6 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
         }
       } catch {}
     }
-
     const parts = param.replace("dl_", "").split("*");
     let query = {};
     if (parts[0] === "movie" || parts[0] === "tv") {
@@ -489,7 +441,6 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
         }
       }
     }
-
     const files = await filesCol.find(query).sort({ quality: -1 }).limit(10).toArray();
     if (!files.length) {
       return bot.sendMessage(chatId,
@@ -497,7 +448,6 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
         { parse_mode: "HTML" }
       );
     }
-
     for (const file of files) {
       try {
         const sizeStr = file.file_size ? (file.file_size / 1073741824).toFixed(2) + " GB" : "Unknown";
@@ -507,7 +457,6 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
           `🌐 ${file.language}${file.audio_format ? ` • ${file.audio_format}` : ""}\n` +
           `📦 ${sizeStr}\n` +
           (file.season ? `📺 S${String(file.season).padStart(2,"0")}${file.episode ? `E${String(file.episode).padStart(2,"0")}` : ""}` : "");
-
         if (file.mime_type?.startsWith("video/")) {
           await retry(() => bot.sendVideo(chatId, file.file_id, { caption, parse_mode: "HTML", supports_streaming: true }));
         } else {
@@ -520,7 +469,6 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
     }
     return;
   }
-
   const botInfo = await bot.getMe().catch(() => ({ first_name: "StreamyFlix" }));
   const welcome =
     `🎬 <b>Welcome to ${botInfo.first_name}!</b>\n\n` +
@@ -530,7 +478,6 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
       ? `⚡ <b>Admin:</b> /stats /index /stopindex /search /pending /autolink /fix /broadcast\n\n`
       : "") +
     (WEBSITE_URL ? `🌐 <a href="${WEBSITE_URL}">Visit Website</a>` : "");
-
   bot.sendMessage(chatId, welcome, {
     parse_mode: "HTML",
     disable_web_page_preview: true,
@@ -542,14 +489,11 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
     },
   });
 });
-
 // ─── Bot: File handling ───────────────────────────────────────────────────────
 async function handleFile(msg, opts = {}) {
   const fileInfo = extractFileInfo(msg);
   if (!fileInfo) return null;
-
   const result = await indexFile(fileInfo, { autoTmdb: !!TMDB_API_KEY, ...opts });
-
   if (msg.chat?.type === "private" && !opts.silent) {
     if (result.ok) {
       const lines = [
@@ -561,7 +505,6 @@ async function handleFile(msg, opts = {}) {
         `🏷️ ${fileInfo.media_type}${fileInfo.season ? ` • S${String(fileInfo.season).padStart(2,"0")} ${fileInfo.episode ? `E${String(fileInfo.episode).padStart(2,"0")}` : ""}` : ""}`,
         result.tmdb_id ? `🔗 Auto-linked TMDB: <b>${result.tmdb_id}</b>` : "",
       ].filter(Boolean).join("\n");
-
       bot.sendMessage(msg.chat.id, lines, {
         parse_mode: "HTML",
         reply_markup: {
@@ -580,7 +523,6 @@ async function handleFile(msg, opts = {}) {
   }
   return result;
 }
-
 bot.on("document", (msg) => handleFile(msg));
 bot.on("video", (msg) => handleFile(msg));
 bot.on("audio", (msg) => handleFile(msg));
@@ -589,16 +531,13 @@ bot.on("channel_post", async (msg) => {
     await handleFile(msg, { silent: true });
   }
 });
-
 // ─── Bot: Forwarded channel detection ────────────────────────────────────────
 bot.on("message", async (msg) => {
   if (msg.chat.type !== "private") return;
   if (!isAdmin(msg.from.id)) return;
   if (!msg.forward_from_chat || msg.forward_from_chat.type !== "channel") return;
-
   const from = msg.forward_from_chat;
   if (msg.document || msg.video || msg.audio) await handleFile(msg, { silent: true });
-
   bot.sendMessage(msg.chat.id,
     `📢 <b>Channel Detected!</b>\n\nForwarded from: <b>${from.title}</b>\nID: <code>${from.id}</code>`,
     {
@@ -614,10 +553,8 @@ bot.on("message", async (msg) => {
     }
   );
 });
-
 // ─── Bulk indexer ─────────────────────────────────────────────────────────────
 const activeIndexJobs = new Map();
-
 async function bulkIndex(channelId, adminChatId, statusMsgId, limit = BATCH_SIZE) {
   let indexed = 0, skipped = 0, errors = 0, duplicates = 0;
   let maxId = 0;
@@ -632,12 +569,10 @@ async function bulkIndex(channelId, adminChatId, statusMsgId, limit = BATCH_SIZE
     ).catch(() => {});
     return;
   }
-
   const startFrom = limit > 0 ? Math.max(1, maxId - limit) : 1;
   let lastUpdate = Date.now();
   let stop = false;
   activeIndexJobs.set(String(channelId), { stop: () => { stop = true; } });
-
   for (let msgId = maxId - 1; msgId >= startFrom && !stop; msgId--) {
     await forwardQueue.push(async () => {
       try {
@@ -661,7 +596,6 @@ async function bulkIndex(channelId, adminChatId, statusMsgId, limit = BATCH_SIZE
       }
       await sleep(RATE_LIMIT);
     });
-
     if ((maxId - msgId) % 25 === 0 || Date.now() - lastUpdate > 5000) {
       lastUpdate = Date.now();
       const total = maxId - startFrom;
@@ -677,7 +611,6 @@ async function bulkIndex(channelId, adminChatId, statusMsgId, limit = BATCH_SIZE
       ).catch(() => {});
     }
   }
-
   activeIndexJobs.delete(String(channelId));
   await bot.editMessageText(
     `✅ <b>Index Complete!</b>\n\n` +
@@ -685,21 +618,17 @@ async function bulkIndex(channelId, adminChatId, statusMsgId, limit = BATCH_SIZE
     { chat_id: adminChatId, message_id: statusMsgId, parse_mode: "HTML" }
   ).catch(() => {});
 }
-
 // ─── Bot: Callbacks ───────────────────────────────────────────────────────────
 const pendingLinks = new Map();
 const pendingTitles = new Map();
 const searchState = new Map();
-
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const userId = query.from.id;
   const msgId = query.message.message_id;
   const data = query.data;
   await bot.answerCallbackQuery(query.id).catch(() => {});
-
   if (data === "dismiss") return bot.deleteMessage(chatId, msgId).catch(() => {});
-
   if (data.startsWith("index_channel_")) {
     if (!isAdmin(userId)) return;
     const parts = data.replace("index_channel_", "").split("_");
@@ -712,7 +641,6 @@ bot.on("callback_query", async (query) => {
     bulkIndex(channelId, chatId, msgId, limit).catch(console.error);
     return;
   }
-
   if (data.startsWith("link_tmdb_")) {
     if (!isAdmin(userId)) return;
     pendingLinks.set(userId, data.replace("link_tmdb_", ""));
@@ -721,7 +649,6 @@ bot.on("callback_query", async (query) => {
       { parse_mode: "HTML" }
     );
   }
-
   if (data.startsWith("edit_title_")) {
     if (!isAdmin(userId)) return;
     pendingTitles.set(userId, data.replace("edit_title_", ""));
@@ -730,7 +657,6 @@ bot.on("callback_query", async (query) => {
       { parse_mode: "HTML" }
     );
   }
-
   if (data.startsWith("delete_file_")) {
     if (!isAdmin(userId)) return;
     const uid = data.replace("delete_file_", "");
@@ -740,7 +666,6 @@ bot.on("callback_query", async (query) => {
       { chat_id: chatId, message_id: msgId }
     ).catch(() => {});
   }
-
   if (data.startsWith("search_page_")) {
     const page = parseInt(data.replace("search_page_", ""));
     const state = searchState.get(userId);
@@ -750,27 +675,23 @@ bot.on("callback_query", async (query) => {
     return;
   }
 });
-
 // ─── Paginated search ─────────────────────────────────────────────────────────
 async function sendSearchResults(chatId, editMsgId, state, userId, edit = false) {
   const PAGE_SIZE = 5;
   const { query: q, page = 0, filter = {} } = state;
   const mongoQuery = { $text: { $search: q }, ...filter };
-
   const [total, results] = await Promise.all([
     filesCol.countDocuments(mongoQuery).catch(() => 0),
     filesCol.find(mongoQuery, { score: { $meta: "textScore" } })
       .sort({ score: { $meta: "textScore" }, download_count: -1 })
       .skip(page * PAGE_SIZE).limit(PAGE_SIZE).toArray().catch(() => []),
   ]);
-
   if (!results.length && page === 0) {
     const text = `🔍 No results for "<b>${q}</b>"`;
     return edit
       ? bot.editMessageText(text, { chat_id: chatId, message_id: editMsgId, parse_mode: "HTML" }).catch(() => {})
       : bot.sendMessage(chatId, text, { parse_mode: "HTML" });
   }
-
   let out = `🔍 <b>Results for "${q}"</b> — ${total} total (page ${page + 1}/${Math.ceil(total / PAGE_SIZE)})\n\n`;
   for (const f of results) {
     const gb = f.file_size ? (f.file_size / 1073741824).toFixed(2) + " GB" : "?";
@@ -779,29 +700,24 @@ async function sendSearchResults(chatId, editMsgId, state, userId, edit = false)
     if (f.season) out += `S${String(f.season).padStart(2,"0")}${f.episode ? `E${String(f.episode).padStart(2,"0")}` : ""}\n`;
     out += `📥 ${f.download_count || 0} dls\n\n`;
   }
-
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const nav = [];
   if (page > 0) nav.push({ text: "◀️ Prev", callback_data: `search_page_${page - 1}` });
   if (page < totalPages - 1) nav.push({ text: "Next ▶️", callback_data: `search_page_${page + 1}` });
-
   const opts = {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: nav.length ? [nav] : [] },
   };
-
   return edit
     ? bot.editMessageText(out, { chat_id: chatId, message_id: editMsgId, ...opts }).catch(() => {})
     : bot.sendMessage(chatId, out, opts);
 }
-
 // ─── Bot: Text commands ───────────────────────────────────────────────────────
 bot.on("message", async (msg) => {
   if (msg.chat.type !== "private" || !msg.text) return;
   const text = msg.text.trim();
   const userId = msg.from.id;
   const chatId = msg.chat.id;
-
   // Pending TMDB link
   if (text.toLowerCase().startsWith("tmdb ") && pendingLinks.has(userId)) {
     const parts = text.split(/\s+/);
@@ -820,7 +736,6 @@ bot.on("message", async (msg) => {
       { parse_mode: "HTML" }
     );
   }
-
   // Pending title edit
   if (text.toLowerCase().startsWith("title ") && pendingTitles.has(userId)) {
     const newTitle = text.replace(/^title\s+/i, "").trim();
@@ -835,7 +750,6 @@ bot.on("message", async (msg) => {
       { parse_mode: "HTML" }
     );
   }
-
   // /stats
   if (text === "/stats" && isAdmin(userId)) {
     const [total, movies, tv, linked, dlAgg, users, topFiles, byQuality] = await Promise.all([
@@ -848,7 +762,6 @@ bot.on("message", async (msg) => {
       filesCol.find().sort({ download_count: -1 }).limit(3).toArray(),
       filesCol.aggregate([{ $group: { _id: "$quality", c: { $sum: 1 } } }, { $sort: { c: -1 } }, { $limit: 6 }]).toArray(),
     ]);
-
     let out = `📊 <b>StreamyFlix Stats</b>\n\n`;
     out += `📁 Files: <b>${total}</b> 🎬 Movies: ${movies} 📺 TV: ${tv}\n`;
     out += `🔗 TMDB linked: ${linked} (${total ? Math.round(linked/total*100) : 0}%)\n`;
@@ -862,7 +775,6 @@ bot.on("message", async (msg) => {
     }
     return bot.sendMessage(chatId, out, { parse_mode: "HTML" });
   }
-
   // /search with inline filters
   if (text.startsWith("/search ") && isAdmin(userId)) {
     const raw = text.replace("/search ", "").trim();
@@ -873,19 +785,16 @@ bot.on("message", async (msg) => {
     if (langM) filter.language = new RegExp(langM[1], "i");
     const qualM = raw.match(/\bquality:(\S+)\b/i);
     if (qualM) filter.quality = new RegExp(qualM[1], "i");
-
     const q = raw
       .replace(/\btype:\S+\b/gi, "")
       .replace(/\blang:\S+\b/gi, "")
       .replace(/\bquality:\S+\b/gi, "")
       .trim();
-
     if (!q) return bot.sendMessage(chatId, "Usage: /search title [type:movie|tv] [lang:hindi] [quality:1080p]");
     const state = { query: q, page: 0, filter };
     searchState.set(userId, state);
     return sendSearchResults(chatId, null, state, userId, false);
   }
-
   // /index
   if (text === "/index" && isAdmin(userId)) {
     if (!CHANNEL_ID) return bot.sendMessage(chatId, "❌ CHANNEL_ID not configured.");
@@ -899,14 +808,12 @@ bot.on("message", async (msg) => {
       ]},
     });
   }
-
   // /stopindex
   if (text === "/stopindex" && isAdmin(userId)) {
     if (!activeIndexJobs.size) return bot.sendMessage(chatId, "No active index job.");
     for (const [, job] of activeIndexJobs) job.stop();
     return bot.sendMessage(chatId, `⛔ Stopping ${activeIndexJobs.size} job(s)…`);
   }
-
   // /fix
   if (text === "/fix" && isAdmin(userId)) {
     const statusMsg = await bot.sendMessage(chatId, "🔄 Re-parsing all records…");
@@ -923,7 +830,6 @@ bot.on("message", async (msg) => {
       { chat_id: chatId, message_id: statusMsg.message_id }
     );
   }
-
   // /pending
   if (text === "/pending" && isAdmin(userId)) {
     const count = await filesCol.countDocuments({ tmdb_id: null });
@@ -936,7 +842,6 @@ bot.on("message", async (msg) => {
     if (TMDB_API_KEY) out += `\n💡 Use /autolink to auto-link all.`;
     return bot.sendMessage(chatId, out, { parse_mode: "HTML" });
   }
-
   // /autolink
   if (text === "/autolink" && isAdmin(userId)) {
     if (!TMDB_API_KEY) return bot.sendMessage(chatId, "❌ TMDB_API_KEY not configured.");
@@ -958,7 +863,6 @@ bot.on("message", async (msg) => {
       { chat_id: chatId, message_id: statusMsg.message_id }
     );
   }
-
   // /broadcast
   if (text.startsWith("/broadcast ") && isAdmin(userId)) {
     const msg_text = text.replace("/broadcast ", "").trim();
@@ -973,33 +877,28 @@ bot.on("message", async (msg) => {
     return bot.sendMessage(chatId, `📣 Broadcast done\n✅ Sent: ${sent} ❌ Failed: ${failed}`);
   }
 });
-
 // ─── Express API ──────────────────────────────────────────────────────────────
 const app = express();
 const allowedOrigins = WEBSITE_URL
   ? [WEBSITE_URL, "http://localhost:5173", "http://localhost:4173", "http://localhost:3000"]
   : true;
-
 app.use(cors({
   origin: allowedOrigins,
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization","x-admin-key"],
 }));
 app.use(express.json({ limit: "2mb" }));
-
 function requireAdminKey(req, res, next) {
   if (!ADMIN_API_KEY) return next();
   const key = req.headers["x-admin-key"] || req.query.admin_key;
   if (key !== ADMIN_API_KEY) return res.status(401).json({ ok: false, error: "Unauthorized" });
   next();
 }
-
 function parsePagination(q) {
   const page = Math.max(0, parseInt(q.page) || 0);
   const limit = Math.min(500, Math.max(1, parseInt(q.limit) || 50));
   return { page, limit, skip: page * limit };
 }
-
 // Health
 app.get("/health", async (req, res) => {
   let dbStatus = "disconnected";
@@ -1012,7 +911,6 @@ app.get("/health", async (req, res) => {
     files: await filesCol.countDocuments().catch(() => 0),
   });
 });
-
 // Stats
 app.get("/api/stats", async (req, res) => {
   try {
@@ -1029,7 +927,6 @@ app.get("/api/stats", async (req, res) => {
     res.json({ ok: true, total, movies, tv, linked, downloads: dlAgg[0]?.total || 0, users, by_quality: byQuality, by_language: byLang });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // List files
 app.get("/api/files", async (req, res) => {
   try {
@@ -1045,10 +942,8 @@ app.get("/api/files", async (req, res) => {
     if (req.query.hdr) query.hdr = req.query.hdr;
     if (req.query.codec) query.codec = req.query.codec;
     if (req.query.unlinked === "1") query.tmdb_id = null;
-
     const sortField = req.query.sort || "indexed_at";
     const sortDir = req.query.dir === "asc" ? 1 : -1;
-
     const [files, total] = await Promise.all([
       filesCol.find(query).sort({ [sortField]: sortDir }).skip(skip).limit(limit).toArray(),
       filesCol.countDocuments(query),
@@ -1056,7 +951,6 @@ app.get("/api/files", async (req, res) => {
     res.json({ ok: true, files, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // Full-text search
 app.get("/api/search", async (req, res) => {
   try {
@@ -1067,7 +961,6 @@ app.get("/api/search", async (req, res) => {
     if (req.query.type) query.media_type = req.query.type;
     if (req.query.quality) query.quality = req.query.quality;
     if (req.query.language) query.language = new RegExp(req.query.language, "i");
-
     const [files, total] = await Promise.all([
       filesCol.find(query, { score: { $meta: "textScore" } })
         .sort({ score: { $meta: "textScore" }, download_count: -1 })
@@ -1077,7 +970,6 @@ app.get("/api/search", async (req, res) => {
     res.json({ ok: true, files, query: q, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // Get file
 app.get("/api/file/:id", async (req, res) => {
   try {
@@ -1088,7 +980,6 @@ app.get("/api/file/:id", async (req, res) => {
     res.json({ ok: true, file });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // Delete file
 app.delete("/api/file/:id", requireAdminKey, async (req, res) => {
   try {
@@ -1098,7 +989,6 @@ app.delete("/api/file/:id", requireAdminKey, async (req, res) => {
     res.json({ ok: true, deleted: result.deletedCount });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // Link file to TMDB
 app.post("/api/link", requireAdminKey, async (req, res) => {
   try {
@@ -1112,7 +1002,6 @@ app.post("/api/link", requireAdminKey, async (req, res) => {
     res.json({ ok: true, modified: result.modifiedCount });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // Bulk TMDB link
 app.post("/api/bulk-link", requireAdminKey, async (req, res) => {
   try {
@@ -1130,7 +1019,6 @@ app.post("/api/bulk-link", requireAdminKey, async (req, res) => {
     res.json({ ok: true, linked: ok, failed });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // TMDB proxy
 app.get("/api/tmdb/:type/:id", async (req, res) => {
   try {
@@ -1151,7 +1039,6 @@ app.get("/api/tmdb/:type/:id", async (req, res) => {
     res.json({ ok: true, data, cached: false });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // Re-parse via API
 app.post("/api/reparse", requireAdminKey, async (req, res) => {
   try {
@@ -1166,7 +1053,6 @@ app.post("/api/reparse", requireAdminKey, async (req, res) => {
     res.json({ ok: true, fixed, failed });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
-
 // Stream proxy
 app.get("/stream", async (req, res) => {
   try {
@@ -1216,23 +1102,19 @@ app.get("/stream", async (req, res) => {
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
-
 // Webhook
 app.post("/webhook", (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
-
 // ─── Process error handlers ───────────────────────────────────────────────────
 process.on("uncaughtException", (e) => console.error("Uncaught exception:", e.message));
 process.on("unhandledRejection", (e) => console.error("Unhandled rejection:", e));
-
 // ─── Start ────────────────────────────────────────────────────────────────────
 async function start() {
   await connectDB();
   const botInfo = await bot.getMe();
   console.log(`🤖 Bot: @${botInfo.username} (${botInfo.id})`);
-
   if (isWebhook && WEBHOOK_URL) {
     try {
       await bot.setWebHook(`${WEBHOOK_URL}/webhook`);
@@ -1241,7 +1123,6 @@ async function start() {
       console.error("Webhook setup failed:", e.message);
     }
   }
-
   const server = app.listen(PORT, () => {
     console.log(`🚀 API running on port ${PORT}`);
     console.log(`📡 Mode: ${isWebhook ? "Webhook" : "Polling"}`);
@@ -1250,7 +1131,6 @@ async function start() {
     console.log(`🔐 Admin API key: ${ADMIN_API_KEY ? "✅ set" : "⚠️ NOT SET (open access)"}`);
     console.log(`🎬 TMDB auto-link: ${TMDB_API_KEY ? "✅ enabled" : "⚠️ disabled"}`);
   });
-
   const shutdown = async (signal) => {
     console.log(`\n${signal} — shutting down gracefully…`);
     server.close(async () => {
@@ -1263,7 +1143,6 @@ async function start() {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 }
-
 start().catch((e) => {
   console.error("❌ Fatal:", e);
   process.exit(1);
